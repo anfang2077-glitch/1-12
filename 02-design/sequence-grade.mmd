@@ -1,0 +1,83 @@
+%% 图 7-6 教师阅卷与成绩重算时序图
+sequenceDiagram
+    autonumber
+    actor T as 教师浏览器
+    participant G as 阅卷页组件
+    participant AX as Axios 拦截器
+    participant RT as Express 路由 /grading
+    participant GS as GradingService
+    participant GR as GradingRepository
+    participant AR as AttemptRepository
+    participant DB as MySQL
+
+    T->>G: 打开待阅列表
+    G->>AX: GET /api/grading/pending
+    AX->>RT: 可选 query examId
+    RT->>GS: listPending(teacher, examId)
+    GS->>GS: 解析教师可批阅的课程范围
+    alt 指定 examId 且不属于本人课程
+        GS-->>RT: 抛出 40301 无权限
+        RT-->>AX: HTTP 403 业务码 40301
+    else 范围合法
+        GS->>GR: findPendingAttempts(teacherId, examId)
+        GR->>DB: SELECT 答卷 LEFT JOIN answers 统计 graded_at 为空的简答题数
+        DB-->>GR: 待阅分组结果
+        GR-->>GS: attemptId studentName submittedAt pendingCount
+        GS-->>RT: 待阅列表
+        RT-->>AX: HTTP 200 code 0 data 列表
+        G-->>T: 渲染待阅表格，pendingCount 为待评分题数
+    end
+
+    T->>G: 选择一份答卷进入阅卷
+    G->>AX: GET /api/grading/:attemptId
+    AX->>RT: 携带 Bearer token
+    RT->>GS: getGradingDetail(attemptId, teacher)
+    GS->>AR: findById 并校验课程归属与状态
+    AR->>DB: SELECT 答卷 考试 学生 与逐题作答
+    DB-->>AR: 明细行
+    alt 答卷不存在
+        GS-->>RT: 抛出 40401 资源不存在
+        RT-->>AX: HTTP 404 业务码 40401
+    else 不属于本人课程
+        GS-->>RT: 抛出 40301 无权限
+        RT-->>AX: HTTP 403 业务码 40301
+    else 答卷仍为 in_progress
+        GS-->>RT: 抛出 40901 该答卷尚未交卷
+        RT-->>AX: HTTP 409 业务码 40901
+    else 允许阅卷
+        GS->>GS: 标记 needGrading 为 type 等于 short 且 graded_at 为空
+        GS-->>RT: 参考答案 学生作答 满分 与已有评语
+        RT-->>AX: HTTP 200 code 0
+        G-->>T: 左侧题目与作答，右侧打分与评语输入框
+    end
+
+    T->>G: 逐题输入分数与评语后提交
+    G->>G: 前端校验分数在 0 与本卷分值之间
+    G->>AX: POST /api/grading/:attemptId
+    AX->>RT: body 为 items 数组，元素含 questionId score comment
+    RT->>GS: gradeSubjective(attemptId, items, teacher)
+    GS->>GS: 校验 items 非空 分数区间 题目属于本卷且为简答题
+    alt 参数不合法
+        GS-->>RT: 抛出 40001 参数错误
+        RT-->>AX: HTTP 400 业务码 40001
+    else 参数合法
+        GS->>DB: BEGIN
+        GS->>DB: SELECT ... FROM attempts WHERE id = ? FOR UPDATE
+        loop 遍历每个评分项
+            GS->>GR: upsertAnswerScore(attemptId, questionId, score, comment, gradedBy, gradedAt)
+            GR->>DB: UPDATE answers SET score comment graded_by graded_at WHERE attempt_id = ? AND question_id = ?
+            DB-->>GR: 影响行数，0 行表示该题不属于本卷
+            alt 影响行数为 0
+                GS->>DB: ROLLBACK
+                GS-->>RT: 抛出 40001 评分项与试卷不匹配
+            end
+        end
+        GS->>DB: SELECT 客观题总分 主观题总分 FROM answers
+        GS->>DB: UPDATE attempts SET subjective_score total_score status 为 graded
+        GS->>DB: COMMIT
+        GS-->>RT: totalScore subjectiveScore 与状态 graded
+        RT-->>AX: HTTP 200 code 0
+        G-->>T: 显示重算后的总分并刷新待阅列表
+    end
+
+    Note over T,DB: 重算口径 总分等于该答卷全部 answers.score 之和，状态置 graded 后学生端 result 立即可见

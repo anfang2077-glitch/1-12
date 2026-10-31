@@ -1,0 +1,68 @@
+%% 图 7-1 登录鉴权与 RBAC 授权时序图
+sequenceDiagram
+    autonumber
+    actor U as 用户浏览器
+    participant FE as 前端 LoginPage 与 AuthContext
+    participant AX as Axios 拦截器
+    participant RT as Express 路由 /auth
+    participant MW as authRequired 中间件
+    participant AS as AuthService
+    participant UR as UserRepository
+    participant DB as MySQL
+
+    U->>FE: 输入 username 与 password 并提交
+    FE->>FE: 前端做非空与长度校验
+    FE->>AX: login 请求
+    AX->>RT: POST /api/auth/login
+    RT->>RT: 校验请求体字段类型
+    RT->>AS: login(username, password)
+
+    AS->>UR: findByUsername(username)
+    UR->>DB: SELECT id, username, password_hash, real_name, role, email, status FROM users WHERE username = ?
+    DB-->>UR: 单行记录或空集
+    UR-->>AS: 用户实体或 null
+
+    alt 用户不存在
+        AS-->>RT: 抛出业务错误 40101 用户名或密码错误
+        RT-->>AX: HTTP 401 业务码 40101
+        AX-->>FE: 统一错误提示
+        FE-->>U: 提示账号或密码错误
+    else 账号被禁用 status 为 0
+        AS-->>RT: 抛出业务错误 40301 账号已被禁用
+        RT-->>AX: HTTP 403 业务码 40301
+        FE-->>U: 提示账号已被禁用
+    else 密码校验失败
+        AS->>AS: bcrypt.compare 返回 false
+        AS-->>RT: 抛出业务错误 40101 用户名或密码错误
+        RT-->>AX: HTTP 401 业务码 40101
+        FE-->>U: 提示账号或密码错误
+    else 校验通过
+        AS->>AS: 生成 payload sub username role，exp 8 小时
+        AS->>AS: jsonwebtoken 以 HS256 签发 token
+        AS-->>RT: token 与脱敏用户对象
+        RT-->>AX: HTTP 200 code 0 data token 与 user
+        AX->>FE: 写入 AuthContext 与 localStorage
+        FE-->>U: 按 role 跳转对应首页
+    end
+
+    Note over FE,DB: 后续每个受保护请求的鉴权链路
+
+    FE->>AX: 打开受保护页面
+    AX->>MW: GET /api/auth/me，Authorization 为 Bearer token
+    MW->>MW: 解析 Bearer 前缀并 verify 签名与 exp
+    alt 令牌缺失 格式错误 过期或签名不符
+        MW-->>AX: HTTP 401 业务码 40101
+        AX->>FE: 清除本地令牌并跳转登录页
+    else 令牌有效
+        MW->>UR: 按 sub 查询用户，确认 status 为 1 且角色未变更
+        UR->>DB: SELECT ... FROM users WHERE id = ?
+        DB-->>UR: 用户记录
+        UR-->>MW: 当前用户
+        MW->>MW: req.user 挂载 id 与 role
+        MW->>RT: 放行至 requireRole 校验
+        alt 角色不在允许集合内
+            RT-->>AX: HTTP 403 业务码 40301 无权限
+        else 角色匹配
+            RT-->>AX: HTTP 200 code 0 data 当前用户
+        end
+    end

@@ -1,0 +1,61 @@
+{
+  "name": "exam-system-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "在线考试系统后端服务（Express 4 + MySQL 8 / 内存仓储双实现）",
+  "main": "src/index.js",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "start:memory": "node src/index.js --memory",
+    "dev": "node --watch src/index.js",
+    "test": "jest --runInBand",
+    "test:coverage": "jest --runInBand --coverage",
+    "db:init": "node src/db/init.js",
+    "db:seed": "node src/db/seed.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "mysql2": "^3.11.5"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "supertest": "^7.0.0"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": [
+      "<rootDir>/tests/**/*.test.js"
+    ],
+    "collectCoverageFrom": [
+      "src/**/*.js",
+      "!src/index.js",
+      "!src/db/init.js",
+      "!src/db/seed.js",
+      "!src/db/seed-data.js",
+      "!src/db/mysql.js",
+      "!src/repositories/mysql/**"
+    ],
+    "coverageReporters": [
+      "text",
+      "text-summary",
+      "lcov"
+    ],
+    "coverageThreshold": {
+      "global": {
+        "lines": 70,
+        "statements": 70,
+        "functions": 65,
+        "branches": 60
+      }
+    },
+    "testTimeout": 20000
+  }
+}

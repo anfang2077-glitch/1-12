@@ -1,0 +1,51 @@
+%% 图 4-1 在线考试系统部署架构图（单机部署）
+%% 说明：Nginx 同时承担静态资源托管与 /api 反向代理，Node 服务无状态可横向扩展，MySQL 为唯一有状态节点。
+flowchart TB
+    subgraph CLIENT["客户端网络"]
+        B1["学生浏览器<br/>Chrome / Edge"]
+        B2["教师浏览器<br/>Chrome / Edge"]
+        B3["管理员浏览器<br/>Chrome / Edge"]
+    end
+
+    subgraph HOST["单台云服务器 / 虚拟机（Ubuntu 22.04 LTS 或 Windows Server）"]
+        subgraph NGX["Nginx 1.24（80 / 443）"]
+            N1["静态资源服务<br/>/ → web/dist 产物"]
+            N2["反向代理<br/>/api/* → 127.0.0.1:3000"]
+            N3["gzip 与缓存头<br/>index.html no-cache"]
+        end
+        subgraph APP["Node.js 20 运行时（PM2 托管）"]
+            A1["dsh-exam-server 进程<br/>Express :3000"]
+            A2["createApp 工厂<br/>装配 Repository 与 Service"]
+            A3["定时器<br/>超时答卷惰性扫描"]
+        end
+        DIST[("静态构建产物<br/>web/dist")]
+        ENV["环境变量 .env<br/>DB_HOST / JWT_SECRET / MYSQL_DRIVER"]
+        LOG["日志文件<br/>access.log / error.log"]
+    end
+
+    subgraph DATA["数据层"]
+        DB[("MySQL 8.0 :3306<br/>exam_system · utf8mb4 · InnoDB")]
+        BAK["备份目录<br/>mysqldump 每日全量"]
+    end
+
+    subgraph DEV["开发与测试环境（不参与生产）"]
+        T1["jest + supertest<br/>MYSQL_DRIVER=memory 无需数据库"]
+        T2["Vite Dev Server :5173<br/>/api 代理到 :3000"]
+    end
+
+    B1 -->|"HTTPS 443"| N1
+    B2 -->|"HTTPS 443"| N1
+    B3 -->|"HTTPS 443"| N1
+    N1 --> DIST
+    B1 -->|"XHR /api"| N2
+    B2 -->|"XHR /api"| N2
+    B3 -->|"XHR /api"| N2
+    N2 -->|"HTTP 127.0.0.1:3000"| A1
+    A1 --> A2
+    A1 --> A3
+    A2 --> ENV
+    A1 --> LOG
+    A2 -->|"TCP 3306 连接池"| DB
+    DB --> BAK
+    T2 -->|"代理 /api"| A1
+    T1 -->|"进程内调用 createApp"| A2

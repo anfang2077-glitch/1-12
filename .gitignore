@@ -1,0 +1,21 @@
+# 依赖与构建产物
+node_modules/
+dist/
+coverage/
+.vite/
+*.log
+
+# 环境与本地配置
+.env
+.env.local
+*.local
+
+# 系统与编辑器
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# 临时文件
+*.tmp
+~$*

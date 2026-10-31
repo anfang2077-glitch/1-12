@@ -1,0 +1,106 @@
+%% 图 5-1 在线考试系统 ER 图（8 张表）
+%% 关系基数说明：||--o{ 表示「1 对 0..N」，||--|| 表示「1 对 1」
+erDiagram
+    users ||--o{ courses : "担任任课教师"
+    users ||--o{ questions : "创建题目"
+    users ||--o{ exams : "创建考试"
+    users ||--o{ exam_students : "被指派为考生"
+    users ||--o{ attempts : "参加考试"
+    users ||--o{ answers : "阅卷打分"
+    courses ||--o{ questions : "归属题库"
+    courses ||--o{ exams : "归属考试"
+    exams ||--o{ exam_questions : "包含题目"
+    questions ||--o{ exam_questions : "被试卷引用"
+    exams ||--o{ exam_students : "指派考生"
+    exams ||--o{ attempts : "产生答卷"
+    attempts ||--o{ answers : "包含作答明细"
+    questions ||--o{ answers : "对应作答"
+
+    users {
+        BIGINT id PK "用户主键，自增"
+        VARCHAR username UK "登录名，学号或工号"
+        VARCHAR password_hash "bcrypt 哈希，cost=10"
+        VARCHAR real_name "真实姓名"
+        ENUM role "角色 admin teacher student"
+        VARCHAR email "邮箱，可空"
+        TINYINT status "1 启用 0 禁用"
+        DATETIME created_at "创建时间"
+    }
+
+    courses {
+        BIGINT id PK "课程主键"
+        VARCHAR name "课程名"
+        VARCHAR code UK "课程代码，唯一"
+        VARCHAR description "课程简介"
+        BIGINT teacher_id FK "任课教师，引用 users.id"
+        DATETIME created_at "创建时间"
+    }
+
+    questions {
+        BIGINT id PK "题目主键"
+        BIGINT course_id FK "所属课程，引用 courses.id"
+        ENUM type "题型 single multiple judge short"
+        VARCHAR stem "题干纯文本"
+        JSON options "选项数组，简答为空"
+        JSON answer "标准答案或参考答案"
+        DECIMAL score "建议分值，组卷可覆盖"
+        TINYINT difficulty "难度 1 至 5"
+        VARCHAR knowledge_point "知识点"
+        VARCHAR analysis "答案解析"
+        BIGINT creator_id FK "创建人，引用 users.id"
+        DATETIME created_at "创建时间"
+    }
+
+    exams {
+        BIGINT id PK "考试主键"
+        VARCHAR title "考试标题"
+        BIGINT course_id FK "所属课程，引用 courses.id"
+        VARCHAR description "考试说明"
+        DATETIME start_time "考试开始时间"
+        DATETIME end_time "考试结束时间"
+        INT duration_min "考试时长，分钟"
+        DECIMAL total_score "试卷总分，题目分值累加"
+        DECIMAL pass_score "及格线"
+        TINYINT shuffle "是否乱序，1 是 0 否"
+        ENUM status "状态 draft published closed"
+        BIGINT created_by FK "创建人，引用 users.id"
+        DATETIME created_at "创建时间"
+    }
+
+    exam_questions {
+        BIGINT id PK "主键"
+        BIGINT exam_id FK "引用 exams.id，级联删除"
+        BIGINT question_id FK "引用 questions.id"
+        DECIMAL score "该题在本卷的分值"
+        INT sort_order "题序，从 1 开始"
+    }
+
+    exam_students {
+        BIGINT id PK "主键"
+        BIGINT exam_id FK "引用 exams.id，级联删除"
+        BIGINT student_id FK "引用 users.id，须为学生角色"
+    }
+
+    attempts {
+        BIGINT id PK "答卷主键"
+        BIGINT exam_id FK "引用 exams.id"
+        BIGINT student_id FK "引用 users.id"
+        DATETIME started_at "实际开考时间"
+        DATETIME submitted_at "交卷时间，未交为空"
+        DATETIME deadline_at "服务端截止时间"
+        ENUM status "状态 in_progress submitted graded"
+        DECIMAL objective_score "客观题得分"
+        DECIMAL subjective_score "主观题得分"
+        DECIMAL total_score "总分"
+    }
+
+    answers {
+        BIGINT id PK "答题明细主键"
+        BIGINT attempt_id FK "引用 attempts.id，级联删除"
+        BIGINT question_id FK "引用 questions.id"
+        JSON answer "学生作答，未答为空"
+        DECIMAL score "本题得分"
+        VARCHAR comment "教师评语"
+        BIGINT graded_by FK "阅卷人，引用 users.id"
+        DATETIME graded_at "阅卷时间"
+    }

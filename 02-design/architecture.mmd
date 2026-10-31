@@ -1,0 +1,114 @@
+%% 图 3-1 在线考试系统总体分层架构图
+%% 说明：自上而下为 表现层 → 接口层 → 业务层 → 数据访问层 → 基础设施层，跨层调用只允许向下依赖。
+flowchart TB
+    subgraph L1["表现层（浏览器 React 18 SPA）"]
+        UI1["登录与角色守卫<br/>LoginPage / ProtectedRoute"]
+        UI2["管理员界面<br/>用户 / 课程 / 全局统计"]
+        UI3["教师界面<br/>题库 / 组卷 / 阅卷 / 统计"]
+        UI4["学生界面<br/>考试列表 / 答题 / 成绩"]
+        UI5["前端公共层<br/>api client / AuthContext / Countdown"]
+    end
+
+    subgraph L2["接口层（Express 4 Router + 中间件链）"]
+        M1["requestId"]
+        M2["express.json<br/>请求体解析"]
+        M3["authRequired<br/>JWT 校验"]
+        M4["requireRole<br/>RBAC 授权"]
+        M5["controller<br/>参数校验与响应封装"]
+        M6["errorHandler<br/>统一错误体"]
+        RT["路由模块<br/>/auth /users /courses /questions<br/>/exams /attempts /grading /stats"]
+    end
+
+    subgraph L3["业务层（services，纯业务规则）"]
+        S1["AuthService<br/>登录与令牌签发"]
+        S2["UserService<br/>用户与角色管理"]
+        S3["CourseService<br/>课程归属校验"]
+        S4["QuestionService<br/>题型与答案校验"]
+        S5["ExamService<br/>组卷、发布、考生指派"]
+        S6["AttemptService<br/>开考、自动保存、断线恢复"]
+        S7["GradingService<br/>自动判分与阅卷重算"]
+        S8["StatsService<br/>成绩统计与分布"]
+        SH["shared: 权限助手 / 状态机 / 时间工具"]
+    end
+
+    subgraph L4["数据访问层（repositories 双实现）"]
+        R1["UserRepository"]
+        R2["CourseRepository"]
+        R3["QuestionRepository"]
+        R4["ExamRepository"]
+        R5["AttemptRepository"]
+        R6["AnswerRepository"]
+        R7["GradingRepository"]
+        R8["StatsRepository"]
+        RI["Repository 接口（契约）"]
+        RM["mysql 实现<br/>mysql2 参数化查询"]
+        RN["memory 实现<br/>测试用内存仓储"]
+    end
+
+    subgraph L5["基础设施层"]
+        I1[("MySQL 8.0<br/>exam_system 库")]
+        I2["mysql2/promise<br/>连接池"]
+        I3["bcryptjs<br/>密码哈希"]
+        I4["jsonwebtoken<br/>令牌签发校验"]
+        I5["zod 风格手写校验工具"]
+        I6["jest + supertest<br/>单元与接口测试"]
+        I7["配置与日志<br/>config.js / requestId 日志"]
+    end
+
+    UI1 --> UI5
+    UI2 --> UI5
+    UI3 --> UI5
+    UI4 --> UI5
+    UI5 -->|"HTTP JSON /api"| M1
+    M1 --> M2
+    M2 --> M3
+    M3 --> M4
+    M4 --> M5
+    M5 --> RT
+    RT --> M6
+    RT --> S1
+    RT --> S2
+    RT --> S3
+    RT --> S4
+    RT --> S5
+    RT --> S6
+    RT --> S7
+    RT --> S8
+    S1 --> SH
+    S2 --> SH
+    S3 --> SH
+    S4 --> SH
+    S5 --> SH
+    S6 --> SH
+    S7 --> SH
+    S8 --> SH
+    S1 --> R1
+    S2 --> R1
+    S3 --> R2
+    S4 --> R3
+    S5 --> R4
+    S5 --> R3
+    S6 --> R5
+    S6 --> R6
+    S7 --> R7
+    S8 --> R8
+    R1 --> RI
+    R2 --> RI
+    R3 --> RI
+    R4 --> RI
+    R5 --> RI
+    R6 --> RI
+    R7 --> RI
+    R8 --> RI
+    RI --> RM
+    RI --> RN
+    RM --> I2
+    I2 --> I1
+    S1 --> I3
+    S1 --> I4
+    M5 --> I5
+    S6 --> I7
+    S7 --> I7
+    RN --> I6
+    RM --> I6
+    RM --> I7

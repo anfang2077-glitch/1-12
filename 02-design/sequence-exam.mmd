@@ -1,0 +1,145 @@
+%% 图 7-3 学生答题全流程时序图（开考与断线恢复 → 答题自动保存 → 交卷与自动判分）
+%% 说明：本图合并基线中的三个阶段时序，(c)(d)(e) 三个子流程以 Note 分隔。
+sequenceDiagram
+    autonumber
+    actor S as 学生浏览器
+    participant P as 答题页组件 Countdown 与 Autosave
+    participant AX as Axios 拦截器
+    participant RT as Express 路由 /exams 与 /attempts
+    participant AS as AttemptService
+    participant GS as GradingService
+    participant AR as AttemptRepository
+    participant NR as AnswerRepository
+    participant DB as MySQL
+
+    Note over S,DB: 阶段一 开考与断线恢复
+
+    S->>AX: 打开可参加考试列表
+    AX->>RT: GET /api/exams/available
+    RT->>AS: listAvailable(studentId)
+    AS->>AR: findByStudent(studentId)
+    AR->>DB: SELECT ... FROM attempts WHERE student_id = ?
+    DB-->>AR: 该生全部答卷
+    AR-->>AS: 答卷集合
+    AS-->>RT: 考试列表并附带 attemptStatus
+    RT-->>AX: HTTP 200 code 0 data 列表
+    AX-->>P: 渲染列表，进行中显示继续答题
+
+    S->>P: 点击开始考试
+    P->>AX: POST /api/exams/:id/attempts
+    AX->>RT: 携带 Bearer token
+    RT->>AS: startAttempt(examId, student)
+
+    AS->>AR: findExamForStudent(examId, studentId)
+    AR->>DB: SELECT 考试 与 exam_students 指派记录
+    DB-->>AR: 考试行与指派行
+
+    alt 考试不存在或未指派
+        AS-->>RT: 抛出 40301 无权限
+        RT-->>AX: HTTP 403 业务码 40301
+    else 状态非 published 或不在考试时间窗口
+        AS-->>RT: 抛出 40901 不在考试时间内
+        RT-->>AX: HTTP 409 业务码 40901
+    else 已有 in_progress 答卷
+        AS->>AR: findByExamAndStudent(examId, studentId)
+        AR->>DB: SELECT ... FROM attempts WHERE exam_id = ? AND student_id = ?
+        DB-->>AR: 原答卷
+        AS->>AS: 计算 remainingSeconds
+        AS-->>RT: 原 attemptId 与 deadlineAt
+        RT-->>AX: HTTP 200 code 0 data 原答卷，重复开考幂等
+    else 已有 submitted 或 graded 答卷
+        AS-->>RT: 抛出 40901 已交卷不可重复开考
+        RT-->>AX: HTTP 409 业务码 40901
+    else 首次开考
+        AS->>AS: deadline_at 取 started_at 加 duration 与 exam.end_time 的较小值
+        AS->>AR: createAttempt(examId, studentId, startedAt, deadlineAt)
+        AR->>DB: INSERT INTO attempts ... ON DUPLICATE KEY 冲突时回查
+        DB-->>AR: 新答卷 id
+        AR-->>AS: 答卷实体
+        AS->>NR: initEmptyAnswers(attemptId, 试卷题目)
+        NR->>DB: INSERT INTO answers 批量占位，answer 为空
+        AS-->>RT: attemptId deadlineAt remainingSeconds
+        RT-->>AX: HTTP 201 code 0
+    end
+
+    P->>AX: GET /api/attempts/:id 恢复答题现场
+    AX->>RT: 断线重连后重新拉取
+    RT->>AS: getAttemptDetail(attemptId, user)
+    AS->>AR: findById 并做归属校验
+    AR->>DB: SELECT 答卷 与 exam_questions 与 answers
+    DB-->>AR: 试卷与已保存作答
+    AS->>AS: 以服务端时间计算 remainingSeconds
+    alt 已超过 deadline_at 且状态为 in_progress
+        AS->>GS: autoSubmit(attemptId, reason 超时)
+        GS->>DB: 事务内判分并置为 submitted
+        AS-->>RT: 状态 submitted 与自动交卷提示
+        RT-->>AX: HTTP 200 code 0，前端提示已自动交卷
+    else 未超时
+        AS-->>RT: 题目 已保存答案 剩余秒数
+        RT-->>AX: HTTP 200 code 0
+        AX-->>P: 恢复选项勾选与倒计时，倒计时以 deadlineAt 为准
+    end
+
+    Note over S,DB: 阶段二 答题自动保存
+
+    loop 学生每次改变选项，前端防抖 300 至 500 毫秒
+        P->>AX: PUT /api/attempts/:id/answers
+        AX->>RT: body 为 questionId 与 answer
+        RT->>AS: saveAnswer(attemptId, questionId, answer, user)
+        AS->>AR: 校验答卷归属与状态
+        AR->>DB: SELECT status deadline_at FROM attempts WHERE id = ?
+        DB-->>AR: 状态
+        alt 答卷非本人或不存在
+            AS-->>RT: 抛出 40301 或 40401
+            RT-->>AX: HTTP 403 或 404 与对应业务码
+        else 已交卷
+            AS-->>RT: 抛出 40901 答卷已提交
+            RT-->>AX: HTTP 409 业务码 40901
+        else 已超时
+            AS->>GS: autoSubmit(attemptId, reason 超时)
+            AS-->>RT: 抛出 40901 考试已结束，答卷已自动提交
+            RT-->>AX: HTTP 409 业务码 40901
+        else 可写
+            AS->>AS: 按题型校验作答形状，多项选择要求数组
+            AS->>NR: upsertAnswer(attemptId, questionId, answer)
+            NR->>DB: INSERT ... ON DUPLICATE KEY UPDATE answer = VALUES(answer)
+            DB-->>NR: 影响行数
+            NR-->>AS: 保存成功
+            AS-->>RT: 保存时间
+            RT-->>AX: HTTP 200 code 0 data savedAt
+            AX-->>P: 显示已保存状态
+        end
+    end
+
+    Note over S,DB: 阶段三 交卷与自动判分
+
+    S->>P: 点击交卷并二次确认
+    P->>AX: POST /api/attempts/:id/submit
+    AX->>RT: 无请求体
+    RT->>AS: submitAttempt(attemptId, student)
+    AS->>AR: 归属与状态校验
+    AR->>DB: SELECT status FROM attempts WHERE id = ?
+    DB-->>AR: 状态
+    alt 状态已是 submitted 或 graded
+        AS->>AR: 读取已判分数
+        AR->>DB: SELECT objective_score subjective_score total_score
+        AS-->>RT: 已存在的判分结果，重复交卷幂等
+        RT-->>AX: HTTP 200 code 0 data 原结果
+    else 状态为 in_progress
+        AS->>GS: gradeObjective(attemptId)
+        GS->>DB: BEGIN
+        GS->>DB: SELECT ... FROM attempts WHERE id = ? FOR UPDATE
+        GS->>DB: SELECT 逐题作答 与 标准答案 与 本卷分值
+        GS->>GS: 单选与判断精确匹配，多选集合完全相等才得分，简答记 0 分待阅
+        GS->>DB: UPDATE answers SET score 批量写入客观题得分
+        GS->>DB: SELECT SUM 汇总 objective_score 与 subjective_score
+        GS->>DB: UPDATE attempts SET submitted_at status 为 submitted 与三项得分
+        GS->>DB: COMMIT
+        GS-->>AS: 判分结果
+        AS-->>RT: totalScore objectiveScore subjectivePending
+        RT-->>AX: HTTP 200 code 0
+        P-->>S: 显示客观题成绩与主观题待阅提示
+    else 状态异常或并发已被其他请求交卷
+        AS-->>RT: 抛出 40901 状态冲突
+        RT-->>AX: HTTP 409 业务码 40901
+    end
